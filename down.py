@@ -48,7 +48,7 @@ def main(url, token, cookie, output):
 
     if cookie:
         cookies = {
-            'session': token
+            'session': cookie
         }
         s.cookies.update(cookies)
 
