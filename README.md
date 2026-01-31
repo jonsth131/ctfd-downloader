@@ -5,7 +5,7 @@ Script to download all challenges from a CTFd server
 ## Usage
 
 ```text
-usage: down.py [-h] -u URL (-t TOKEN | -c COOKIE) [-o OUTPUT] [--no-spinner]
+usage: down.py [-h] -u URL (-t TOKEN | -c COOKIE) [-o OUTPUT]
 
 CTFd Downloader
 
@@ -18,12 +18,10 @@ options:
                         CTFd Session Cookie
   -o OUTPUT, --output OUTPUT
                         Output directory
-  --no-spinner          Disable spinner output
 ```
 
 Example
 
 ```text
 python3 down.py -u demo.ctfd.io -t <token> -o /tmp/ctfd
-python3 down.py -u demo.ctfd.io -t <token> -o /tmp/ctfd --no-spinner
 ```

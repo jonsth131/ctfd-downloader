@@ -24,16 +24,6 @@ END = '\033[0m'
 logger = logging.getLogger(__name__)
 
 
-def spinning_cursor():
-    """Yield an infinite spinner sequence of characters.
-
-    Useful for showing progress in the terminal one character at a time.
-    """
-    while True:
-        for cursor in '|/-\\':
-            yield cursor
-
-
 def clean_name(name):
     """Normalize a challenge or category name into a filesystem-safe slug.
 
@@ -86,7 +76,8 @@ def fetch_challenges(s, url):
     try:
         with s.get(url + CHALLENGES_PATH, timeout=10) as r:
             if r.status_code != 200:
-                logger.error('Error fetching challenges: %s', r.status_code)
+                logger.error(
+                    f'{RED}Error fetching challenges: {r.status_code}{END}')
                 return None
             try:
                 return r.json()['data']
@@ -130,10 +121,9 @@ def save_description(dest_dir, description):
         f.write(description)
 
 
-def download_single_file(s, file, base_url, dest_dir, show_spinner=True):
+def download_single_file(s, file, base_url, dest_dir):
     """Download a single file and return True on success.
     """
-    spinner = spinning_cursor()
     file_url = base_url + file
     file_name = file.split('/')[-1].split('?')[0]
     file_path = os.path.join(dest_dir, file_name)
@@ -146,17 +136,14 @@ def download_single_file(s, file, base_url, dest_dir, show_spinner=True):
             with open(file_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
-                        if show_spinner:
-                            print(next(spinner), end='', flush=True)
-                            print('\b', end='', flush=True)
-                    f.write(chunk)
+                        f.write(chunk)
         return True
     except requests.exceptions.RequestException as e:
-        logger.error('Request error downloading %s: %s', file_url, e)
+        logger.error(f'{RED}Request error downloading {file_url}: {e}{END}')
         return False
 
 
-def download_files(s, base_url, files, dest_dir, max_workers=4, show_spinner=True):
+def download_files(s, base_url, files, dest_dir, max_workers=4):
     """Download a list of files, optionally concurrently.
 
     Parameters
@@ -165,7 +152,6 @@ def download_files(s, base_url, files, dest_dir, max_workers=4, show_spinner=Tru
     - files: iterable of file path strings (each typically begins with `/`)
     - dest_dir: directory to write files into
     - max_workers: number of threads to use; if <=1 downloads are sequential
-    - show_spinner: when True prints spinner characters during downloads
 
     Returns True if all downloads succeeded, False if any failed.
     """
@@ -173,25 +159,25 @@ def download_files(s, base_url, files, dest_dir, max_workers=4, show_spinner=Tru
     if max_workers and max_workers > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [ex.submit(download_single_file, s, f,
-                                 base_url, dest_dir, show_spinner) for f in files]
+                                 base_url, dest_dir) for f in files]
             for fut in concurrent.futures.as_completed(futures):
                 try:
                     ok = fut.result()
                     if not ok:
                         success = False
                 except Exception as e:
-                    logger.error('Download task raised: %s', e)
+                    logger.error(f'{RED}Download task raised: {e}{END}')
                     success = False
     else:
         for f in files:
-            ok = download_single_file(s, f, base_url, dest_dir, show_spinner)
+            ok = download_single_file(s, f, base_url, dest_dir)
             if not ok:
                 success = False
 
     return success
 
 
-def main(url, token, cookie, output, show_spinner=True):
+def main(url, token, cookie, output):
     """Run the downloader workflow and return an exit code.
 
     Returns 0 on success and 1 if any fetch or download failed.
@@ -212,7 +198,7 @@ def main(url, token, cookie, output, show_spinner=True):
 
     logger.info(f'{GREEN}[+] Found {len(challenges)} challenges{END}')
 
-    for challenge in challenges:
+    def _process_challenge(challenge):
         challenge_id = challenge['id']
         challenge_name = challenge['name']
         challenge_category = challenge['category']
@@ -223,27 +209,42 @@ def main(url, token, cookie, output, show_spinner=True):
             output, challenge_category_dir, challenge_name_dir)
         os.makedirs(challenge_output, exist_ok=True)
 
-        print(f'Downloading {challenge_name} ({challenge_category})', end=' ')
+        print(
+            f'Downloading {challenge_name} ({challenge_category})', flush=True)
 
         if os.path.exists(os.path.join(challenge_output, 'description.md')):
-            print('... Skipping, already downloaded')
-            continue
+            print(
+                f'{CYAN}Skipping {challenge_name}, already downloaded{END}', flush=True)
+            return 0
 
-        challenge_data = fetch_challenge_data(s, url, challenge_id)
+        thread_s = build_session(token, cookie)
+        challenge_data = fetch_challenge_data(thread_s, url, challenge_id)
         if challenge_data is None:
-            failure = True
-            continue
+            return 1
 
-        description = challenge_data['description']
-        files = challenge_data['files']
+        description = challenge_data.get('description', '')
+        files = challenge_data.get('files', [])
 
         save_description(challenge_output, description)
-        ok = download_files(s, url, files, challenge_output,
-                            show_spinner=show_spinner)
+        ok = download_files(thread_s, url, files, challenge_output,
+                            max_workers=4)
         if not ok:
-            failure = True
+            return 1
 
-        print(f'{GREEN}Done{END}')
+        print(f'{GREEN}Downloaded {challenge_name}{END}', flush=True)
+        return 0
+
+    max_workers = 4
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_process_challenge, ch) for ch in challenges]
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                rc = fut.result()
+                if rc != 0:
+                    failure = True
+            except Exception as e:
+                logger.error(f'{RED}Challenge task raised: {e}{END}')
+                failure = True
 
     return 1 if failure else 0
 
@@ -258,11 +259,7 @@ if __name__ == '__main__':
     group.add_argument('-c', '--cookie', type=str, help='CTFd Session Cookie')
     parser.add_argument('-o', '--output', type=str,
                         help='Output directory', required=False, default='.')
-    parser.add_argument('--no-spinner', action='store_true',
-                        help='Disable spinner output')
-
     args = parser.parse_args()
 
-    rc = main(args.url, args.token, args.cookie,
-              args.output, show_spinner=not args.no_spinner)
+    rc = main(args.url, args.token, args.cookie, args.output)
     sys.exit(rc if rc is not None else 0)

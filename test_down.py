@@ -207,8 +207,7 @@ class TestDown(unittest.TestCase):
         mock_s.get.return_value = file_resp
 
         files = ['/files/test.txt']
-        download_files(mock_s, 'http://ctfd', files, 'outdir',
-                       max_workers=1, show_spinner=False)
+        download_files(mock_s, 'http://ctfd', files, 'outdir', max_workers=1)
 
         m_open.assert_called_with(os.path.join('outdir', 'test.txt'), 'wb')
 
@@ -229,8 +228,7 @@ class TestDown(unittest.TestCase):
         mock_s = MagicMock()
         mock_s.get.side_effect = requests.exceptions.RequestException('fail')
         files = ['/files/test.txt']
-        download_files(mock_s, 'http://ctfd', files, 'outdir',
-                       max_workers=1, show_spinner=False)
+        download_files(mock_s, 'http://ctfd', files, 'outdir', max_workers=1)
         m_open.assert_not_called()
 
 
