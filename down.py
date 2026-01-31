@@ -130,6 +130,32 @@ def save_description(dest_dir, description):
         f.write(description)
 
 
+def download_single_file(s, file, base_url, dest_dir, show_spinner=True):
+    """Download a single file and return True on success.
+    """
+    spinner = spinning_cursor()
+    file_url = base_url + file
+    file_name = file.split('/')[-1].split('?')[0]
+    file_path = os.path.join(dest_dir, file_name)
+    try:
+        with s.get(file_url, stream=True, timeout=10) as r:
+            if getattr(r, 'status_code', None) != 200:
+                logger.error('Error downloading %s: %s', file_url,
+                             getattr(r, 'status_code', None))
+                return False
+            with open(file_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        if show_spinner:
+                            print(next(spinner), end='', flush=True)
+                            print('\b', end='', flush=True)
+                    f.write(chunk)
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error('Request error downloading %s: %s', file_url, e)
+        return False
+
+
 def download_files(s, base_url, files, dest_dir, max_workers=4, show_spinner=True):
     """Download a list of files, optionally concurrently.
 
@@ -143,34 +169,11 @@ def download_files(s, base_url, files, dest_dir, max_workers=4, show_spinner=Tru
 
     Returns True if all downloads succeeded, False if any failed.
     """
-    spinner = spinning_cursor()
-
-    def _download_single(file):
-        file_url = base_url + file
-        file_name = file.split('/')[-1].split('?')[0]
-        file_path = os.path.join(dest_dir, file_name)
-        try:
-            with s.get(file_url, stream=True, timeout=10) as r:
-                if r.status_code != 200:
-                    logger.error('Error downloading %s: %s',
-                                 file_url, r.status_code)
-                    return False
-                with open(file_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            if show_spinner:
-                                print(next(spinner), end='', flush=True)
-                                print('\b', end='', flush=True)
-                        f.write(chunk)
-            return True
-        except requests.exceptions.RequestException as e:
-            logger.error('Request error downloading %s: %s', file_url, e)
-            return False
-
     success = True
     if max_workers and max_workers > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(_download_single, f) for f in files]
+            futures = [ex.submit(download_single_file, s, f,
+                                 base_url, dest_dir, show_spinner) for f in files]
             for fut in concurrent.futures.as_completed(futures):
                 try:
                     ok = fut.result()
@@ -181,7 +184,7 @@ def download_files(s, base_url, files, dest_dir, max_workers=4, show_spinner=Tru
                     success = False
     else:
         for f in files:
-            ok = _download_single(f)
+            ok = download_single_file(s, f, base_url, dest_dir, show_spinner)
             if not ok:
                 success = False
 
